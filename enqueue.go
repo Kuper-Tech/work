@@ -64,6 +64,42 @@ func (e *Enqueuer) Enqueue(jobName string, args map[string]interface{}) (*Job, e
 	return job, nil
 }
 
+// EnqueueBatch enqueues multiple jobs with job name and arguments.
+func (e *Enqueuer) EnqueueBatch(jobName string, args ...Q) error {
+	qArgs := make([]interface{}, 0, len(args)+1)
+
+	qArgs = append(qArgs, e.queuePrefix+jobName)
+
+	for _, arg := range args {
+		job := &Job{
+			Name:       jobName,
+			ID:         makeIdentifier(),
+			EnqueuedAt: nowEpochSeconds(),
+			Args:       arg,
+		}
+
+		rawJSON, err := job.serialize()
+		if err != nil {
+			return err
+		}
+
+		qArgs = append(qArgs, rawJSON)
+	}
+
+	conn := e.Pool.Get()
+	defer conn.Close()
+
+	if _, err := conn.Do("LPUSH", qArgs...); err != nil {
+		return err
+	}
+
+	if err := e.addToKnownJobs(conn, jobName); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // EnqueueIn enqueues a job in the scheduled job queue for execution in secondsFromNow seconds.
 func (e *Enqueuer) EnqueueIn(jobName string, secondsFromNow int64, args map[string]interface{}) (*ScheduledJob, error) {
 	job := &Job{

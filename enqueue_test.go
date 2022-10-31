@@ -51,6 +51,39 @@ func TestEnqueue(t *testing.T) {
 	assert.EqualValues(t, 2, listSize(pool, redisKeyJobs(ns, "wat")))
 }
 
+func TestEnqueueBatch(t *testing.T) {
+	pool := newTestPool(":6379")
+	ns := "work"
+	cleanKeyspace(ns, pool)
+
+	jobName := "bat"
+	jobCount := 5
+	jobArgs := make([]Q, 0, jobCount)
+
+	for i := 0; i < jobCount; i++ {
+		jobArgs = append(jobArgs, Q{"a": i})
+	}
+
+	enqueuer := NewEnqueuer(ns, pool)
+	err := enqueuer.EnqueueBatch(jobName, jobArgs...)
+	assert.NoError(t, err)
+
+	// Make sure jobName is in the known jobs
+	assert.EqualValues(t, []string{jobName}, knownJobs(pool, redisKeyKnownJobs(ns)))
+
+	// Make sure the cache is set
+	expiresAt := enqueuer.knownJobs[jobName]
+	assert.True(t, expiresAt > (time.Now().Unix()+290))
+
+	// Make sure the length of the queue is jobCount
+	assert.EqualValues(t, jobCount, listSize(pool, redisKeyJobs(ns, jobName)))
+
+	// Now enqueue another job, make sure that we can enqueue multiple
+	err = enqueuer.EnqueueBatch(jobName, jobArgs...)
+	assert.NoError(t, err)
+	assert.EqualValues(t, jobCount*2, listSize(pool, redisKeyJobs(ns, jobName)))
+}
+
 func TestEnqueueIn(t *testing.T) {
 	pool := newTestPool(":6379")
 	ns := "work"
