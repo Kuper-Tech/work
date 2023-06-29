@@ -172,11 +172,17 @@ return nil`, fetchKeysPerJobType)
 //
 // KEYS[1] = the 1st job's in progress queue
 // KEYS[2] = the 1st job's job queue
-// KEYS[3] = the 2nd job's in progress queue
-// KEYS[4] = the 2nd job's job queue
+// KEYS[3] = the 1nd job's lock key
+// KEYS[4] = the 1nd job's lock info key
+// KEYS[5] = the 2st job's in progress queue
+// KEYS[6] = the 2st job's job queue
+// KEYS[7] = the 2nd job's lock key
+// KEYS[8] = the 2nd job's lock info key
 // ...
 // KEYS[N] = the last job's in progress queue
 // KEYS[N+1] = the last job's job queue
+// KEYS[N+2] = the last job's lock key
+// KEYS[N+3] = the last job's lock info key
 // ARGV[1] = workerPoolID for job queue
 var redisLuaReenqueueJob = fmt.Sprintf(`
 local function releaseLock(lockKey, lockInfoKey, workerPoolID)

@@ -274,9 +274,10 @@ func (wp *WorkerPool) Drain() {
 
 func (wp *WorkerPool) startRequeuers() {
 	jobNames := make([]string, 0, len(wp.jobTypes))
-	for k := range wp.jobTypes {
-		jobNames = append(jobNames, k)
+	for name := range wp.jobTypes {
+		jobNames = append(jobNames, name)
 	}
+
 	wp.retrier = newRequeuer(wp.namespace, wp.pool, redisKeyRetry(wp.namespace), jobNames)
 	wp.scheduler = newRequeuer(wp.namespace, wp.pool, redisKeyScheduled(wp.namespace), jobNames)
 	wp.deadPoolReaper = newDeadPoolReaper(wp.namespace, wp.pool, jobNames, wp.reapPeriod)
