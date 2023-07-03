@@ -168,6 +168,46 @@ for i=1,keylen,%d do
 end
 return nil`, fetchKeysPerJobType)
 
+// Used to remove job from the in-progress queue.
+//
+// KEYS[1] = in-progress job queue
+// KEYS[2] = job's lock key
+// KEYS[3] = job's lock info key
+// KEYS[4] = forward queue
+// ARGV[1] = worker pool id
+// ARGV[2] = job value
+// ARGV[3] = should the failed job be redirected to another queue?
+// ARGV[4] = failed job score
+// ARGV[5] = failed job value
+var redisRemoveJobFromInProgress = redis.NewScript(4, `
+local function releaseLock(lockKey, lockInfoKey, workerPoolID)
+  redis.call('decr', lockKey)
+  redis.call('hincrby', lockInfoKey, workerPoolID, -1)
+end
+
+local inProgQueue = KEYS[1]
+local lockKey = KEYS[2]
+local lockInfoKey = KEYS[3]
+local workerPoolID = ARGV[1]
+local job = ARGV[2]
+local forward = ARGV[3]
+local result = tonumber(redis.call('lrem', inProgQueue, 1, job))
+
+if result ~= 0 then
+  releaseLock(lockKey, lockInfoKey, workerPoolID)
+
+  if forward then
+    local queue = KEYS[4]
+    local score = ARGV[4]
+    local failedJob = ARGV[5]
+
+    redis.call('zadd', queue, score, failedJob)
+  end
+end
+
+return nil
+`)
+
 // Used by the reaper to re-enqueue jobs that were in progress
 //
 // KEYS[1] = the 1st job's in progress queue
