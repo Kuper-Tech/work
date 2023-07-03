@@ -261,6 +261,7 @@ var redisLuaReapStaleLocks = `
 local keylen = #KEYS
 local lock, lockInfo, deadLockCount
 local deadPoolID = ARGV[1]
+local negativeLocks = {}
 
 for i=1,keylen,2 do
   lock = KEYS[i]
@@ -272,11 +273,13 @@ for i=1,keylen,2 do
     redis.call('hdel', lockInfo, deadPoolID)
 
     if tonumber(redis.call('get', lock)) < 0 then
+      table.insert(negativeLocks, lock)
       redis.call('set', lock, 0)
     end
   end
 end
-return nil
+
+return negativeLocks
 `
 
 // KEYS[1] = zset of jobs (retry or scheduled), eg work:retry

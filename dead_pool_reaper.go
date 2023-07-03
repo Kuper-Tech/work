@@ -199,6 +199,14 @@ func (r *deadPoolReaper) cleanStaleLockInfo(poolID string, jobTypes []string) er
 		return err
 	}
 
+	negativeLocks, err := redis.Strings(redisReapLocksScript.Do(conn, scriptArgs...))
+	if err != nil {
+		return err
+	}
+	if len(negativeLocks) > 0 {
+		Logger.Printf("Reaper: negative locks: %v", negativeLocks)
+	}
+
 	return nil
 }
 
