@@ -260,6 +260,10 @@ func (w *worker) removeJobFromInProgress(job *Job, jt *jobType, runErr error) er
 			queue = redisKeyRetry(w.namespace)
 			score = nowEpochSeconds() + jt.calcBackoff(job)
 		default:
+			// NOTE: sidekiq limits the # of jobs: only keep jobs for 6 months, and only keep a max # of jobs
+			// The max # of jobs seems really horrible. Seems like operations should be on top of it.
+			// conn.Send("ZREMRANGEBYSCORE", redisKeyDead(w.namespace), "-inf", now - keepInterval)
+			// conn.Send("ZREMRANGEBYRANK", redisKeyDead(w.namespace), 0, -maxJobs)
 			forward = true
 			queue = redisKeyDead(w.namespace)
 			score = nowEpochSeconds()

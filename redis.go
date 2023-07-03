@@ -257,6 +257,7 @@ return nil`, requeueKeysPerJob)
 // KEYS[N] = the last job's lock
 // KEYS[N+1] = the last job's lock info haash
 // ARGV[1] = the dead worker pool id
+// Returns: list of negative locks (which were set to zero)
 var redisLuaReapStaleLocks = `
 local keylen = #KEYS
 local lock, lockInfo, deadLockCount
