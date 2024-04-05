@@ -155,7 +155,7 @@ func (w *watchdog) processed(j *Job) {
 
 	job.each(func(h *checkTimesHeap) bool {
 		n, _ := h.Peek()
-		if n.Before(time.Unix(j.EnqueuedAt, 0)) {
+		if !n.After(time.Unix(j.EnqueuedAt, 0)) {
 			h.Pop()
 			job.processed.Add(1)
 
