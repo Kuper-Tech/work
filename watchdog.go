@@ -131,7 +131,7 @@ func (w *watchdog) checking(t time.Time) {
 				h.Pop()
 				job.skipped.Add(1)
 
-				w.logger.Error("Watchdog: skipped job",
+				w.logger.Warn("Watchdog: skipped job",
 					slog.String("job_name", name),
 					slog.Time("job_next_time", n),
 					slog.Int64("jobs_skipped", job.skipped.Load()),
