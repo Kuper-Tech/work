@@ -79,9 +79,13 @@ func (pe *periodicEnqueuer) loop() {
 		case <-pe.stopChan:
 			pe.doneStoppingChan <- struct{}{}
 			return
-		case <-timer.C:
+		case t := <-timer.C:
 			timer.Reset(periodicEnqueuerSleep + time.Duration(rand.Intn(30))*time.Second)
-			if pe.shouldEnqueue() {
+			shouldEnqueue := pe.shouldEnqueue()
+			pe.logger.Debug("periodic_enqueuer.loop",
+				slog.Time("enqueue_time", t),
+				slog.Bool("should_enqueue", shouldEnqueue))
+			if shouldEnqueue {
 				err := pe.enqueue()
 				if err != nil {
 					pe.logger.Error("periodic_enqueuer.loop.enqueue", errAttr(err))
