@@ -146,14 +146,14 @@ func (r *deadPoolReaper) reap() (err error) {
 
 	deadPools, rErr := r.reapDeadPools()
 	if jobs := deadPools.getAllJobs(); len(jobs) != 0 {
-		r.logger.Info("Reaper: dead pools", slog.Any("dead", deadPools))
+		r.logger.Info("Reaper: dead pools", slog.Any("dead", deadPools.toPoolInfo()))
 
 		reapResult.NoPoolHeartBeatJobs = jobs
 	}
 
 	unknownPools, cErr := r.clearUnknownPools()
 	if jobs := unknownPools.getAllJobs(); len(jobs) != 0 {
-		r.logger.Info("Reaper: unknown pools", slog.Any("unknown", unknownPools))
+		r.logger.Info("Reaper: unknown pools", slog.Any("unknown", unknownPools.toPoolInfo()))
 
 		reapResult.UnknownPoolJobs = jobs
 	}
@@ -448,4 +448,21 @@ func (p poolsJobs) getAllJobs() []string {
 	}
 
 	return r
+}
+
+type poolInfo struct {
+	PoolID string   `json:"pool_id"`
+	Jobs   []string `json:"jobs"`
+}
+
+func (p poolsJobs) toPoolInfo() []poolInfo {
+	poolsList := make([]poolInfo, 0, len(p))
+	for poolID, jobs := range p {
+		poolsList = append(poolsList, poolInfo{
+			PoolID: poolID,
+			Jobs:   jobs,
+		})
+	}
+
+	return poolsList
 }
