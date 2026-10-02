@@ -126,6 +126,7 @@ func NewWorkerPool(ctx interface{}, concurrency uint, namespace string, pool Poo
 
 	wp.watchdog = newWatchdog(
 		watchdogWithLogger(wp.logger),
+		watchdogWithRedis(wp.pool, wp.namespace),
 		watchdogWithFailCheckingTimeout(wp.watchdogFailCheckingTimeout),
 	)
 

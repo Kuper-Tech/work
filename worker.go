@@ -2,6 +2,7 @@ package work
 
 import (
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"reflect"
 	"time"
@@ -144,6 +145,7 @@ func (w *worker) loop() {
 			} else if job != nil {
 				if w.processedJobs != nil {
 					w.processedJobs <- job
+					w.markPeriodicJobDone(job)
 				}
 				w.processJob(job)
 				consequtiveNoJobs = 0
@@ -161,6 +163,21 @@ func (w *worker) loop() {
 				timer.Reset(sleepBackoffs[idx])
 			}
 		}
+	}
+}
+
+// markPeriodicJobDone tells all pods that a periodic job tick has been picked up.
+// The queue is shared and only one pod fetches the job, while every pod has its own watchdog
+// that gets no local "picked up" signal on the other pods. The shared Redis marker lets them
+// tell another pod's execution from a real skip.
+func (w *worker) markPeriodicJobDone(job *Job) {
+	epoch, ok := parsePeriodicEpoch(job.ID)
+	if !ok {
+		return
+	}
+
+	if err := markPeriodicDone(w.pool, w.namespace, job.Name, epoch); err != nil {
+		w.logger.Error("worker.mark_periodic_done", errAttr(err), slog.String("job_name", job.Name))
 	}
 }
 

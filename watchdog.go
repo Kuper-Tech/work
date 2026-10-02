@@ -6,12 +6,18 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gomodule/redigo/redis"
 )
 
 // WatchdogFailCheckingTimeout a default checking timeout that marks task as failed.
 const WatchdogFailCheckingTimeout = 60 * time.Second
 
 const processedJobsBuffer = 256
+
+// periodicDoneTTL is how long the "tick picked up" marker lives in Redis. It must be well above
+// failCheckingTimeout, otherwise the watchdog may not see it in time.
+const periodicDoneTTL = time.Hour
 
 // The WatchdogStat struct represents statistics for a periodic jobs, including the name, counter,
 type WatchdogStat struct {
@@ -29,6 +35,11 @@ type watchdog struct {
 	failCheckingTimeout time.Duration
 	stopChan            chan struct{}
 	logger              StructuredLogger
+
+	// pool and namespace are used to check the shared tick marker before warning:
+	// the job may have been picked up by a worker of another pod. If pool is nil, the check is disabled.
+	pool      Pool
+	namespace string
 }
 
 type watchdogOption func(w *watchdog)
@@ -36,6 +47,13 @@ type watchdogOption func(w *watchdog)
 func watchdogWithLogger(logger StructuredLogger) watchdogOption {
 	return func(w *watchdog) {
 		w.logger = logger
+	}
+}
+
+func watchdogWithRedis(pool Pool, namespace string) watchdogOption {
+	return func(w *watchdog) {
+		w.pool = pool
+		w.namespace = namespace
 	}
 }
 
@@ -129,6 +147,20 @@ func (w *watchdog) checking(t time.Time) {
 			n, _ := h.Peek()
 			if n.Add(w.failCheckingTimeout).Before(t) {
 				h.Pop()
+
+				// A worker of another pod picked up the tick, so it is not a skip.
+				if w.doneByAnyPod(name, n) {
+					job.processed.Add(1)
+
+					w.logger.Debug("Watchdog: job processed by another pod",
+						slog.String("job_name", name),
+						slog.Time("job_next_time", n),
+						slog.Int64("jobs_processed", job.processed.Load()),
+					)
+
+					return false
+				}
+
 				job.skipped.Add(1)
 
 				w.logger.Warn("Watchdog: skipped job",
@@ -143,6 +175,43 @@ func (w *watchdog) checking(t time.Time) {
 			return true
 		})
 	}
+}
+
+// doneByAnyPod checks the shared tick marker in Redis. If Redis is unavailable it returns false:
+// an extra warning is better than a lost real skip.
+func (w *watchdog) doneByAnyPod(jobName string, scheduledAt time.Time) bool {
+	if w.pool == nil {
+		return false
+	}
+
+	done, err := periodicDone(w.pool, w.namespace, jobName, scheduledAt.Unix())
+	if err != nil {
+		w.logger.Error("Watchdog: check periodic done",
+			slog.String("job_name", jobName),
+			errAttr(err),
+		)
+
+		return false
+	}
+
+	return done
+}
+
+// markPeriodicDone sets the shared "tick picked up" marker (written by the worker that fetched the job).
+func markPeriodicDone(pool Pool, namespace, jobName string, epoch int64) error {
+	conn := pool.Get()
+	defer conn.Close()
+
+	_, err := conn.Do("SET", redisKeyPeriodicDone(namespace, jobName, epoch), 1, "EX", int64(periodicDoneTTL/time.Second))
+
+	return err
+}
+
+func periodicDone(pool Pool, namespace, jobName string, epoch int64) (bool, error) {
+	conn := pool.Get()
+	defer conn.Close()
+
+	return redis.Bool(conn.Do("EXISTS", redisKeyPeriodicDone(namespace, jobName, epoch)))
 }
 
 // processed method is responsible for handling a processed job in the watchdog system.

@@ -39,6 +39,12 @@ func redisKeyJobsInProgress(namespace, poolID, jobName string) string {
 	return fmt.Sprintf("%s:%s:inprogress", redisKeyJobs(namespace, jobName), poolID)
 }
 
+// redisKeyPeriodicDone is the marker that a periodic job tick has been picked up.
+// Unlike the local watchdog state, it is shared by all pods.
+func redisKeyPeriodicDone(namespace, jobName string, epoch int64) string {
+	return fmt.Sprintf("%swatchdog:done:%s:%d", redisNamespacePrefix(namespace), jobName, epoch)
+}
+
 func redisKeyRetry(namespace string) string {
 	return redisNamespacePrefix(namespace) + "retry"
 }

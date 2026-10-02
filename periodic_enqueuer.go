@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gomodule/redigo/redis"
@@ -163,6 +165,23 @@ func (pe *periodicEnqueuer) shouldEnqueue() bool {
 	return lastEnqueue < (nowEpochSeconds() - int64(periodicEnqueuerSleep/time.Second))
 }
 
+const periodicIDPrefix = "periodic:"
+
+// parsePeriodicEpoch extracts the tick epoch from an ID like "periodic:<name>:<spec>:<epoch>".
+// Job.EnqueuedAt is not suitable for this: the requeuer overwrites it with the time the job was moved to the queue.
+func parsePeriodicEpoch(id string) (int64, bool) {
+	if !strings.HasPrefix(id, periodicIDPrefix) {
+		return 0, false
+	}
+
+	epoch, err := strconv.ParseInt(id[strings.LastIndexByte(id, ':')+1:], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+
+	return epoch, true
+}
+
 func makeUniquePeriodicID(name, spec string, epoch int64) string {
-	return fmt.Sprintf("periodic:%s:%s:%d", name, spec, epoch)
+	return fmt.Sprintf("%s%s:%s:%d", periodicIDPrefix, name, spec, epoch)
 }
