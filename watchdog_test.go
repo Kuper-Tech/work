@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -127,11 +128,13 @@ func TestWatchdogJobDoneByAnotherPod(t *testing.T) {
 	planned := j.schedule.Next(now)
 
 	// "Another pod" picked up the tick and set the shared marker.
-	require.NoError(markPeriodicDone(pool, ns, jobName, planned.Unix()))
+	require.NoError(markPeriodicDone(pool, ns, jobName, planned.Unix(), periodicDoneTTL))
 
 	w.checking(planned.Add(timeout + time.Second))
 
-	require.Equal(WatchdogStat{Name: jobName, Processed: 1, Skipped: 0}, w.stats()[0])
+	// Processed is counted only by the pod whose worker picked up the tick,
+	// otherwise the sum over pods would be N times the real number.
+	require.Equal(WatchdogStat{Name: jobName, Processed: 0, Skipped: 0}, w.stats()[0])
 }
 
 // Nobody picked up the tick: there is no marker in Redis, so it is a real skip.
@@ -193,7 +196,7 @@ func TestWatchdogDoneMarkIsPerTick(t *testing.T) {
 	w.planning(now)
 	planned := j.schedule.Next(now)
 
-	require.NoError(markPeriodicDone(pool, ns, jobName, planned.Unix()+1))
+	require.NoError(markPeriodicDone(pool, ns, jobName, planned.Unix()+1, periodicDoneTTL))
 
 	w.checking(planned.Add(timeout + time.Second))
 
@@ -308,4 +311,56 @@ func TestWatchdogJobDoneAfterRequeue(t *testing.T) {
 	done, err := periodicDone(pool, ns, jobName, epoch)
 	require.NoError(err)
 	require.True(done)
+}
+
+// The marker must outlive failCheckingTimeout, otherwise a timeout above the default TTL gives a false skip.
+func TestWorkerPoolDoneMarkTTLCoversFailCheckingTimeout(t *testing.T) {
+	require := require.New(t)
+
+	const (
+		ns      = "work-worker-mark-ttl"
+		jobName = "test"
+		epoch   = int64(1700000000)
+		timeout = 2 * time.Hour
+	)
+
+	pool := newTestPool(":6379")
+	cleanKeyspace(ns, pool)
+	defer cleanKeyspace(ns, pool)
+
+	wp := NewWorkerPool(TestContext{}, 1, ns, pool, WithWatchdogFailCheckingTimeout(timeout))
+	wp.workers[0].markPeriodicJobDone(&Job{Name: jobName, ID: makeUniquePeriodicID(jobName, "0 0 * * * *", epoch)})
+
+	conn := pool.Get()
+	defer conn.Close()
+
+	ttl, err := redis.Int64(conn.Do("TTL", redisKeyPeriodicDone(ns, jobName, epoch)))
+	require.NoError(err)
+	require.Greater(ttl, int64(timeout/time.Second))
+}
+
+// With an exhausted pool (Wait: true) the check must not block the watchdog goroutine:
+// it gives up and falls back to the warning.
+func TestWatchdogDoneCheckDoesNotBlockOnExhaustedPool(t *testing.T) {
+	require := require.New(t)
+
+	pool := newTestPool(":6379")
+	pool.MaxActive = 1
+
+	busy := pool.Get()
+	defer busy.Close()
+	_, err := busy.Do("PING")
+	require.NoError(err)
+
+	w := newWatchdog(watchdogWithRedis(pool, "work-watchdog-exhausted"))
+
+	res := make(chan bool, 1)
+	go func() { res <- w.doneByAnyPod("test", time.Now()) }()
+
+	select {
+	case done := <-res:
+		require.False(done)
+	case <-time.After(3 * watchdogRedisTimeout):
+		t.Fatal("doneByAnyPod is blocked by the exhausted pool")
+	}
 }

@@ -29,6 +29,8 @@ type worker struct {
 	middleware    []*middlewareHandler
 	contextType   reflect.Type
 	processedJobs chan<- *Job
+	// periodicDoneTTL is the TTL of the "tick picked up" marker, periodicDoneTTL by default.
+	periodicDoneTTL time.Duration
 
 	redisFetchScript *redis.Script
 	sampler          prioritySampler
@@ -176,9 +178,17 @@ func (w *worker) markPeriodicJobDone(job *Job) {
 		return
 	}
 
-	if err := markPeriodicDone(w.pool, w.namespace, job.Name, epoch); err != nil {
+	if err := markPeriodicDone(w.pool, w.namespace, job.Name, epoch, w.markTTL()); err != nil {
 		w.logger.Error("worker.mark_periodic_done", errAttr(err), slog.String("job_name", job.Name))
 	}
+}
+
+func (w *worker) markTTL() time.Duration {
+	if w.periodicDoneTTL > 0 {
+		return w.periodicDoneTTL
+	}
+
+	return periodicDoneTTL
 }
 
 func (w *worker) fetchJob() (*Job, error) {

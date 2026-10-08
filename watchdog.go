@@ -2,6 +2,7 @@ package work
 
 import (
 	"container/heap"
+	"context"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -15,9 +16,23 @@ const WatchdogFailCheckingTimeout = 60 * time.Second
 
 const processedJobsBuffer = 256
 
-// periodicDoneTTL is how long the "tick picked up" marker lives in Redis. It must be well above
-// failCheckingTimeout, otherwise the watchdog may not see it in time.
+// periodicDoneTTL is the minimal lifetime of the "tick picked up" marker in Redis.
+// The actual TTL is taken from periodicDoneTTLFor, so that the marker outlives failCheckingTimeout.
 const periodicDoneTTL = time.Hour
+
+// watchdogRedisTimeout limits the wait for a Redis connection in the watchdog goroutine.
+// The same goroutine reads processedJobs, so it must not block on an exhausted pool.
+const watchdogRedisTimeout = time.Second
+
+// periodicDoneTTLFor returns the marker TTL for the given failCheckingTimeout: the watchdog checks the
+// marker failCheckingTimeout after the tick, so the marker must live longer than that.
+func periodicDoneTTLFor(failCheckingTimeout time.Duration) time.Duration {
+	if ttl := 2 * failCheckingTimeout; ttl > periodicDoneTTL {
+		return ttl
+	}
+
+	return periodicDoneTTL
+}
 
 // The WatchdogStat struct represents statistics for a periodic jobs, including the name, counter,
 type WatchdogStat struct {
@@ -148,14 +163,12 @@ func (w *watchdog) checking(t time.Time) {
 			if n.Add(w.failCheckingTimeout).Before(t) {
 				h.Pop()
 
-				// A worker of another pod picked up the tick, so it is not a skip.
+				// A worker of another pod picked up the tick, so it is not a skip. Processed is not
+				// incremented: it is counted by the pod that picked up the tick.
 				if w.doneByAnyPod(name, n) {
-					job.processed.Add(1)
-
 					w.logger.Debug("Watchdog: job processed by another pod",
 						slog.String("job_name", name),
 						slog.Time("job_next_time", n),
-						slog.Int64("jobs_processed", job.processed.Load()),
 					)
 
 					return false
@@ -198,20 +211,39 @@ func (w *watchdog) doneByAnyPod(jobName string, scheduledAt time.Time) bool {
 }
 
 // markPeriodicDone sets the shared "tick picked up" marker (written by the worker that fetched the job).
-func markPeriodicDone(pool Pool, namespace, jobName string, epoch int64) error {
+func markPeriodicDone(pool Pool, namespace, jobName string, epoch int64, ttl time.Duration) error {
 	conn := pool.Get()
 	defer conn.Close()
 
-	_, err := conn.Do("SET", redisKeyPeriodicDone(namespace, jobName, epoch), 1, "EX", int64(periodicDoneTTL/time.Second))
+	_, err := conn.Do("SET", redisKeyPeriodicDone(namespace, jobName, epoch), 1, "EX", int64(ttl/time.Second))
 
 	return err
 }
 
+// periodicDone is called from the watchdog goroutine, so the wait for a connection is limited
+// by watchdogRedisTimeout if the pool supports GetContext (as *redis.Pool does).
 func periodicDone(pool Pool, namespace, jobName string, epoch int64) (bool, error) {
-	conn := pool.Get()
+	conn, err := getConnWithTimeout(pool, watchdogRedisTimeout)
+	if err != nil {
+		return false, err
+	}
 	defer conn.Close()
 
 	return redis.Bool(conn.Do("EXISTS", redisKeyPeriodicDone(namespace, jobName, epoch)))
+}
+
+func getConnWithTimeout(pool Pool, timeout time.Duration) (redis.Conn, error) {
+	p, ok := pool.(interface {
+		GetContext(ctx context.Context) (redis.Conn, error)
+	})
+	if !ok {
+		return pool.Get(), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return p.GetContext(ctx)
 }
 
 // processed method is responsible for handling a processed job in the watchdog system.

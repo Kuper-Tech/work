@@ -141,6 +141,7 @@ func NewWorkerPool(ctx interface{}, concurrency uint, namespace string, pool Poo
 			wp.logger,
 			wp.watchdog.processedJobs,
 		)
+		w.periodicDoneTTL = periodicDoneTTLFor(wp.watchdog.failCheckingTimeout)
 		wp.workers = append(wp.workers, w)
 	}
 
